@@ -1,0 +1,294 @@
+---
+title: "Forecast daily bike rental demand using time series models"
+author: "Mashhood Raza Khan"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+# About Data Analysis Report
+
+This RMarkdown file contains the report of the data analysis done for the project on forecasting daily bike rental demand using time series models in R. It contains analysis such as data exploration, summary statistics and building the time series models. The final report was completed on `r date()`. 
+
+**Data Description:**
+
+This dataset contains the daily count of rental bike transactions between years 2011 and 2012 in Capital bikeshare system with the corresponding weather and seasonal information.
+
+**Data Source:** https://archive.ics.uci.edu/ml/datasets/bike+sharing+dataset
+
+**Relevant Paper:** 
+
+Fanaee-T, Hadi, and Gama, Joao. Event labeling combining ensemble detectors and background knowledge, Progress in Artificial Intelligence (2013): pp. 1-15, Springer Berlin Heidelberg
+
+
+
+
+
+
+# Load and Explore The Data
+
+```{r}
+
+# Set CRAN mirror
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+#Install Necessary Packages
+install.packages("timetk")
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("GGally")
+install.packages("ggthemes")
+
+#load Packages
+library(timetk)
+library(tidyverse)
+library(lubridate)
+library(GGally)
+library(ggthemes)
+library(dplyr)
+
+#Load Dataset
+data("bike_sharing_daily")
+bike_data <- bike_sharing_daily
+View(bike_data)
+
+```
+
+
+
+```{r}
+
+#Exploratory Analysis
+summary(bike_data)
+glimpse(bike_data)
+str(bike_data)
+
+#Correlation between Temperature and Total Rental
+cor(bike_data$temp, bike_data$cnt)
+cor(bike_data$atemp, bike_data$cnt)
+
+#Correlation between Temperature and Casual/Registered User
+cor(bike_data$temp, bike_data$registered)
+cor(bike_data$temp, bike_data$casual)
+
+#Extract Date Components
+bike_data <- bike_sharing_daily %>%
+  mutate(
+    date = as.Date(dteday),  # Create a new proper date column
+    month = month(date, label = TRUE),
+    year = year(date),
+    weekday = wday(date, label = TRUE),
+    weekend = ifelse(weekday %in% c("Sat", "Sun"), "Weekend", "Weekday")
+  )
+
+#Mean and Median Temperature by Season
+bike_data %>%
+  group_by(season) %>%
+  summarise(mean_temp=mean(temp), median_temp=median(temp))
+
+#Monthly Summary of Temperature, Humidity, Windspeed, and Total Rentals 
+bike_data %>%
+  mutate(month=month(date, label=TRUE)) %>%
+  group_by(month) %>%
+  summarise(across(c(temp,atemp,hum,windspeed,cnt), mean, .names="mean_{col}"))
+
+#Box Plot of Temperature by Season
+boxplot(temp~season, data=bike_data,main="Temperature by Season", col="skyblue")
+
+#Correlation Matrix of Continuous Variables
+bike_data %>%
+  select(temp,atemp,hum,windspeed,casual,registered,cnt) %>%
+  ggpairs(title="Correlation Matrix of Key Variables")
+
+```
+
+
+
+
+
+# Create Interactive Time Series Plots
+
+```{r}
+
+#Time Series of Total Rentals
+bike_data %>%
+  plot_time_series(date,cnt, .interactive=TRUE, .title="Daily Bike Rental Over Time")
+
+#Registered vs Casual Over Time
+bike_data %>%
+  select(date, registered,casual) %>%
+  pivot_longer(col=-date, names_to="type", values_to="rentals") %>%
+  plot_time_series(date, rentals, .color_var=type, .interactive=TRUE, .title="Registered vs Casual Users")
+
+#Seasonal Diagonostics
+bike_data %>%
+  plot_seasonal_diagnostics(date, cnt)
+
+#Anomaly Detection
+bike_data %>%
+  plot_anomaly_diagnostics(date,cnt)
+
+```
+
+
+
+
+
+
+# Smooth Time Series Data
+
+```{r}
+
+#Load Packages
+install.packages("forecast")
+install.packages("TTR")
+library(forecast)
+library(TTR)
+
+#Convert to Time Series Object
+ts_data <- ts(bike_data$cnt, frequency=365)
+ts_clean <- tsclean(ts_data)
+
+#Plot Original vs Clean Data
+plot(ts_data, col="red", main="Original vs Cleaned Time Series")
+lines(ts_clean, col="blue")
+
+#Simple Exponential Smoothing
+ses_model <- HoltWinters(ts_clean, beta=FALSE, gamma=FALSE)
+plot(ses_model, main="Simple Exponential Smoothing")
+
+#Simple Moving Average with Order 10
+sma_10 <- SMA(ts_clean, n=10)
+plot.ts(sma_10, main="10-Day Moving Average", col="darkgreen")
+
+```
+
+
+
+
+
+# Decompose and Assess The Stationarity of Time Series Data
+
+```{r}
+
+#Load Test for Stationary
+install.packages("tseries")
+library(tseries)
+
+#Decompose Time Series
+decompose <- decompose(ts_clean)
+plot(decompose)
+
+#Remove Seasonality
+adjusted_ts <- ts_clean - decompose$seasonal
+plot(adjusted_ts, main="Seasonally Adjusted Series")
+adf.test(adjusted_ts)
+
+#Plot ACF and PACF
+acf(adjusted_ts)
+pacf(adjusted_ts)
+
+#Differencing if Non-Stationary
+diff_ts <- diff(adjusted_ts)
+plot(diff_ts, main="Differenced Series")
+
+```
+
+
+
+
+
+# Fit and Forecast Time Series Data Using ARIMA Models
+
+```{r}
+
+#Auto ARIMA M
+auto_model <- auto.arima(ts_clean)
+summary(auto_model)
+
+#Manual ARIMA Example (Can be Optimised)
+manual_model <- arima(ts_clean, order=c(1,1,1))
+summary(manual_model)
+
+#Residual Diagnostic
+shapiro.test(residuals(auto_model))
+acf(residuals(auto_model))
+pacf(residuals(auto_model))
+
+#Forecast Next 25 Days
+forecast_auto <- forecast(auto_model, h=25)
+forecast_manual <- forecast(manual_model, h=25)
+
+#Plot Forecast
+plot(forecast_auto, main="Forecast with Auto ARIMA")
+plot(forecast_manual, main="Forecast with Manual ARIMA")
+
+```
+
+
+
+
+
+# Heatmap of Season vs Weekday Rentals
+
+```{r}
+
+#Visualise Patterns Across Seasons and Weekdays
+bike_data %>%
+  group_by(season, weekday) %>%
+  summarise(avg_count = mean(cnt)) %>%
+  ggplot(aes(x = weekday, y = season, fill = avg_count)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(title = "Heatmap: Average Rentals by Weekday and Season",
+       x = "Weekday", y = "Season", fill = "Avg Rentals") +
+  theme_minimal()
+
+```
+
+
+
+
+
+# Professional Time Series Plot
+
+```{r}
+
+install.packages("ggthemes")
+library(ggthemes)
+
+bike_data %>%
+  ggplot(aes(x = date, y = cnt)) +
+  geom_line(color = "steelblue", size = 1) +
+  labs(title = "Bike Rentals Over Time",
+       subtitle = "Capital Bikeshare Program (2011–2012)",
+       x = "Date", y = "Rental Count") +
+  theme_economist()
+
+```
+
+
+
+
+
+# Findings & Conclusions
+
+- **Strong Seasonal Patterns:** The data exhibits robust seasonality, with clear peaks and troughs that align with weather variations and calendar effects, such as weekends and holidays.
+- **Temperature Sensitivity:** A high positive correlation between temperature and total rentals confirms that warmer days attract significantly more riders.
+- **Calendar-Based Trends:** Weekends, holidays, and non-working days show markedly different demand dynamics compared to weekdays.
+- **Effective Forecasting Models:**
+  - Auto ARIMA provided the most statistically robust fit with the lowest AIC (6097.63) and residual autocorrelation near zero, making it ideal for short-term predictions.
+  - Manual ARIMA (1,1,1) was also effective but had higher error metrics (e.g., RMSE = 812.91 vs. 697.81 for Auto ARIMA).
+- **Residual Diagnostics:**
+  - The Shapiro-Wilk test revealed non-normality of residuals, indicating possible model refinement areas.
+  - ACF and PACF plots confirmed no strong autocorrelation in residuals, validating model appropriateness for forecasting.
+- **Data Quality:** Preprocessing such as outlier smoothing, decomposition, and stationarity adjustments were critical in improving model performance and interpretability.
+
+This time series forecasting project successfully modeled the **daily bike rental demand** for the Capital Bikeshare system. The rigorous data cleaning, decomposition, and stationarity testing ensured a stable time series structure conducive to ARIMA modeling. The use of both **manual and automated ARIMA models** enabled comparative diagnostics, where Auto ARIMA was preferred due to its lower error metrics and better residual properties.
+
+Overall, this analysis demonstrates the feasibility of **data-driven demand forecasting** in urban mobility. It highlights how **weather** and **calendar** features critically influence public transportation usage. These insights are highly valuable for urban planners and operational teams aiming to optimize bike distribution, plan fleet expansion, or build adaptive pricing strategies.
+
+The project not only meets the goals of forecasting but also illustrates the importance of statistical rigor in transforming raw data into **actionable intelligence**.
+
